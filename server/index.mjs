@@ -9,13 +9,19 @@ import { createHmac, createHash, randomInt, timingSafeEqual } from 'node:crypto'
 import RecoveryCode from './models/RecoveryCode.mjs';
 import nodemailer from 'nodemailer';
 import PasswordResetToken from './models/PasswordResetToken.mjs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const recoveryAttempts = new Map();
 const MAX_RECOVERY_ATTEMPTS = 5;
 const RECOVERY_WINDOW_MS = 15 * 60 * 1000;
 
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
+const frontendDirectory = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../dist'
+);
 
 app.use(
   express.json({
@@ -778,16 +784,15 @@ async function startTelegramPolling() {
     }
   }
 }
-
+app.use(express.static(frontendDirectory));
 async function startServer() {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('Connected to MongoDB Atlas');
 
-    app.listen(port, () => {
-      console.log(`Contact API running at http://localhost:${port}`);
-      startTelegramPolling();
-    });
+    app.listen(port, '0.0.0.0', () => {
+  console.log(`Reach server listening on port ${port}`);
+});
   } catch (error) {
     console.error('MongoDB connection failed:', error.message);
     process.exit(1);
