@@ -1,16 +1,63 @@
-# React + Vite
+# Reach
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Reach is a contact assistant for times when your phone isn’t with you. Save contacts in your Reach account, then use the Telegram bot to look one up from another device with a one-time recovery code.
 
-Currently, two official plugins are available:
+**Live app:** [reach-contact-assistant.onrender.com](https://reach-contact-assistant.onrender.com)  
+**Telegram bot:** [@HannanReachBot](https://t.me/HannanReachBot)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Features
 
-## React Compiler
+- Sign up, sign in, and manage your own contacts
+- Search contacts by name or phone number
+- Prevent duplicate names and phone numbers within an account
+- Generate one-time recovery codes for Telegram lookups
+- Reset a forgotten password with an emailed code
+- Store contacts in MongoDB Atlas
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Telegram lookup
 
-## Expanding the ESLint configuration
+1. Sign in to Reach and generate recovery codes.
+2. Open [@HannanReachBot](https://t.me/HannanReachBot) and send `/start`.
+3. Send a lookup in this format:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+   ```text
+   LOOKUP your-email@example.com 123456 Contact Name
+
+
+Each recovery code can be used for one lookup. Keep unused codes private.
+Technology
+- React and Vite
+- Node.js and Express
+- MongoDB Atlas with Mongoose
+- JWT authentication and bcrypt password hashing
+- Telegram Bot API
+- Nodemailer for password reset emails
+Run locally
+You’ll need Node.js, npm, and a MongoDB Atlas database.
+1. Install dependencies:
+   npm install
+2. Create a .env file in the project root. Add your own values:
+   MONGODB_URI=your_mongodb_connection_string
+   JWT_SECRET=your_long_random_secret
+   TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+   
+   SMTP_HOST=your_smtp_host
+   SMTP_PORT=587
+   SMTP_SECURE=false
+   SMTP_USER=your_email_address
+   SMTP_PASS=your_email_password_or_app_password
+   MAIL_FROM=your_email_address
+   Never commit .env or share its secrets. The repository ignores this file.
+3. Start the backend in one terminal:
+   npm run server
+4. Start the frontend in another terminal:
+   npm run dev
+5. Open the local URL printed by Vite in your browser.
+Deployment
+The app is deployed as a Render web service. It builds the frontend with:
+npm ci && npm run build
+and starts the server with:
+node server/index.mjs
+Set the required environment variables in Render’s service settings. Do not put secret values in this README or in GitHub.
+Security notes
+Recovery codes are one-time use. Contact API routes require authentication and only return contacts belonging to the signed-in account. Keep your account password, recovery codes, bot token, database URI, and SMTP credentials private.
