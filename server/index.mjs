@@ -792,6 +792,7 @@ async function startServer() {
 
     app.listen(port, '0.0.0.0', () => {
   console.log(`Reach server listening on port ${port}`);
+  void startTelegramPolling();
 });
   } catch (error) {
     console.error('MongoDB connection failed:', error.message);
