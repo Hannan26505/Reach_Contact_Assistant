@@ -13,6 +13,18 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    lookupPinHash: {
+      type: String,
+      default: null,
+    },
+    lookupPinFailedAttempts: {
+      type: Number,
+      default: 0,
+    },
+    lookupPinLockedUntil: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
