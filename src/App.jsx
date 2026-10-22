@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
+import TelegramLookup from './TelegramLookup.jsx';
 
-
-function App() {
+function ReachApp() {
   const [recoveryCodes, setRecoveryCodes] = useState([]);
   const [recoveryError, setRecoveryError] = useState('');
   const [contacts, setContacts] = useState([]);
   const [search, setSearch] = useState('');
   const [formError, setFormError] = useState('');
   const [apiStatus, setApiStatus] = useState('Sign in to load contacts.');
+  const [lookupPinMessage, setLookupPinMessage] = useState('');
+  const [lookupPinError, setLookupPinError] = useState('');
 
   const [token, setToken] = useState(
     () => localStorage.getItem('reach-token') || ''
@@ -201,6 +203,43 @@ async function handleResetPassword(event) {
   }
 }
 
+async function handleSaveLookupPin(event) {
+  event.preventDefault();
+
+  const form = event.currentTarget;
+  const pin = new FormData(form).get('pin').trim();
+
+  setLookupPinMessage('');
+  setLookupPinError('');
+
+  try {
+    const response = await fetch('/api/lookup-pin', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ pin }),
+    });
+
+    const result = await response.json();
+
+    if (response.status === 401) {
+      clearSession('Your session expired. Please sign in again.');
+      return;
+    }
+
+    if (!response.ok) {
+      setLookupPinError(result.message || 'Could not save the lookup PIN.');
+      return;
+    }
+
+    setLookupPinMessage(result.message);
+    form.reset();
+  } catch {
+    setLookupPinError('Could not connect to the server.');
+  }
+}
   async function handleAddContact(event) {
     event.preventDefault();
 
@@ -590,6 +629,33 @@ async function handleResetPassword(event) {
         <button type="button" onClick={handleSignOut}>
           Sign out
         </button>
+        <section>
+          <h2>Telegram lookup PIN</h2>
+          <p>Set a six-digit PIN for contact lookups in the Telegram Mini App.</p>
+
+          <form onSubmit={handleSaveLookupPin}>
+            <label>
+              Six-digit PIN
+              <input
+                name="pin"
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                minLength="6"
+                maxLength="6"
+                autoComplete="off"
+                required
+              />
+            </label>
+
+            <button type="submit">Set or change PIN</button>
+          </form>
+
+          {lookupPinMessage && <p role="status">{lookupPinMessage}</p>}
+          {lookupPinError && (
+            <p className="form-error" role="alert">{lookupPinError}</p>
+          )}
+        </section>
 
         <button type="button" onClick={handleGenerateRecoveryCodes}>
           Generate or replace emergency codes
@@ -671,4 +737,10 @@ async function handleResetPassword(event) {
 );
 }
 
+function App() {
+  const isTelegramMiniApp =
+    new URLSearchParams(window.location.search).get('miniapp') === '1';
+
+  return isTelegramMiniApp ? <TelegramLookup /> : <ReachApp />;
+}
 export default App;

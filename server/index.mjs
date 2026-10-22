@@ -170,6 +170,35 @@ function authenticateToken(request, response, next) {
     return response.status(401).json({ message: 'Invalid or expired token.' });
   }
 }
+app.post('/api/lookup-pin', authenticateToken, async (request, response) => {
+  try {
+    const pin = String(request.body?.pin ?? '').trim();
+
+    if (!/^\d{6}$/.test(pin)) {
+      return response.status(400).json({
+        message: 'Choose a six-digit lookup PIN.',
+      });
+    }
+
+    const user = await User.findById(request.userId);
+
+    if (!user) {
+      return response.status(404).json({ message: 'Account not found.' });
+    }
+
+    user.lookupPinHash = await bcrypt.hash(pin, 12);
+    user.lookupPinFailedAttempts = 0;
+    user.lookupPinLockedUntil = null;
+    await user.save();
+
+    return response.json({ message: 'Lookup PIN saved.' });
+  } catch (error) {
+    console.error('Could not save lookup PIN:', error.message);
+    return response.status(500).json({
+      message: 'Could not save the lookup PIN.',
+    });
+  }
+});
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -633,7 +662,91 @@ if (previous && now - previous.startedAt < RECOVERY_WINDOW_MS) {
   }
 });
 
-async function sendTelegramMessage(chatId, text) {
+app.post('/api/telegram/lookup', async (request, response) => {
+  try {
+    const email = String(request.body?.email ?? '').trim().toLowerCase();
+    const pin = String(request.body?.pin ?? '').trim();
+    const query = String(request.body?.query ?? '').trim();
+
+    if (!email || !/^\d{6}$/.test(pin) || !query) {
+      return response.status(400).json({
+        message: 'Enter your email, six-digit PIN, and contact name.',
+      });
+    }
+
+    const user = await User.findOne({ email });
+
+    if (!user || !user.lookupPinHash) {
+      return response.status(401).json({
+        message: 'Email or PIN is incorrect.',
+      });
+    }
+
+    const now = new Date();
+
+    if (user.lookupPinLockedUntil && user.lookupPinLockedUntil > now) {
+      return response.status(429).json({
+        message: 'Too many incorrect PIN attempts. Try again later.',
+      });
+    }
+
+    const pinIsCorrect = await bcrypt.compare(pin, user.lookupPinHash);
+
+    if (!pinIsCorrect) {
+      user.lookupPinFailedAttempts += 1;
+
+      if (user.lookupPinFailedAttempts >= 5) {
+        user.lookupPinLockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+        await user.save();
+
+        return response.status(429).json({
+          message: 'Too many incorrect PIN attempts. Try again in 15 minutes.',
+        });
+      }
+
+      await user.save();
+
+      return response.status(401).json({
+        message: 'Email or PIN is incorrect.',
+      });
+    }
+
+    user.lookupPinFailedAttempts = 0;
+    user.lookupPinLockedUntil = null;
+    await user.save();
+
+    const normalizedQuery = query.toLowerCase();
+    const phoneDigits = query.replace(/\D/g, '');
+    const conditions = [
+      { nameKey: { $regex: escapeRegex(normalizedQuery) } },
+    ];
+
+    if (phoneDigits) {
+      conditions.push({
+        phoneDigits: { $regex: escapeRegex(phoneDigits) },
+      });
+    }
+
+    const contacts = await Contact.find({
+      ownerId: user._id,
+      $or: conditions,
+    })
+      .select('name phone')
+      .sort({ name: 1 })
+      .limit(5);
+
+    return response.json({
+      contacts: contacts.map(({ name, phone }) => ({ name, phone })),
+    });
+  } catch (error) {
+    console.error('Telegram Mini App lookup failed:', error.message);
+    return response.status(500).json({
+      message: 'Could not complete the contact lookup.',
+    });
+  }
+});
+
+async function sendTelegramMessage(chatId, text, replyMarkup) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
 
   const response = await fetch(
@@ -641,7 +754,11 @@ async function sendTelegramMessage(chatId, text) {
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text }),
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      }),
     }
   );
 
@@ -680,12 +797,22 @@ async function handleTelegramMessage(message) {
   if (!chatId || !text) return;
 
   if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
-    await sendTelegramMessage(
-      chatId,
-      'Reach contact lookup is ready. Send:\nLOOKUP your-email@example.com 123456 Contact Name'
-    );
-    return;
-  }
+  await sendTelegramMessage(
+    chatId,
+    'Tap below to look up a contact in Reach.',
+    {
+      inline_keyboard: [[
+        {
+          text: 'Open Reach lookup',
+          web_app: {
+            url: 'https://reach-contact-assistant.onrender.com/?miniapp=1',
+          },
+        },
+      ]],
+    }
+  );
+  return;
+}
 
   const match = text.match(/^LOOKUP\s+(\S+)\s+(\d{6})\s+(.+)$/i);
 
