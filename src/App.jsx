@@ -458,14 +458,20 @@ async function handleSaveLookupPin(event) {
 
               <article className="how-card">
                 <span className="step-number">02</span>
-                <h3>Save your codes</h3>
-                <p>Generate emergency codes. Each code is for one lookup.</p>
+                <h3>Set your lookup PIN</h3>
+                <p>Choose a six-digit PIN in Reach. It stays the same until you change it.</p>
               </article>
 
               <article className="how-card">
                 <span className="step-number">03</span>
-                <h3>Ask Telegram</h3>
-                <p>Message the bot with your email, code, and contact name.</p>
+                <h3>Open the Mini App</h3>
+                <p>Message the Telegram bot with <code>/start</code>, then tap “Open Reach lookup.”</p>
+              </article>
+
+              <article className="how-card">
+                <span className="step-number">04</span>
+                <h3>Find your contact</h3>
+                <p>Enter your Reach email, masked PIN, and the contact’s name or number.</p>
               </article>
             </div>
 
