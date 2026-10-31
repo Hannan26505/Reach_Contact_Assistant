@@ -5,9 +5,13 @@ import Contact from './models/Contact.mjs';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from './models/User.mjs';
-import { createHmac, createHash, randomInt, timingSafeEqual } from 'node:crypto';
+import {
+  createHmac,
+  createHash,
+  randomInt,
+  timingSafeEqual,
+} from 'node:crypto';
 import RecoveryCode from './models/RecoveryCode.mjs';
-import nodemailer from 'nodemailer';
 import PasswordResetToken from './models/PasswordResetToken.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,15 +36,41 @@ app.use(
   })
 );
 
-const mailer = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT || 587),
-  secure: process.env.SMTP_SECURE === 'true',
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+async function sendReachEmail({ to, subject, text }) {
+  const apiKey = process.env.BREVO_API_KEY;
+  const senderEmail = process.env.BREVO_SENDER_EMAIL;
+  const senderName = process.env.BREVO_SENDER_NAME || 'Reach';
+
+  if (!apiKey || !senderEmail) {
+    throw new Error('BREVO_API_KEY or BREVO_SENDER_EMAIL is missing.');
+  }
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': apiKey,
+      'Content-Type': 'application/json',
+      accept: 'application/json',
+    },
+    body: JSON.stringify({
+      sender: {
+        name: senderName,
+        email: senderEmail,
+      },
+      to: [{ email: to }],
+      subject,
+      textContent: text,
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.message || 'Brevo rejected the email request.');
+  }
+
+  return result;
+}
 
 app.get('/webhook', (request, response) => {
   const mode = request.query['hub.mode'];
@@ -84,73 +114,73 @@ app.post('/webhook', async (request, response) => {
 
   const incomingMessages = [];
 
-for (const entry of request.body.entry ?? []) {
-  for (const change of entry.changes ?? []) {
-    if (change.field !== 'messages') continue;
+  for (const entry of request.body.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      if (change.field !== 'messages') continue;
 
-    for (const message of change.value?.messages ?? []) {
-      if (
-        message.type === 'text' &&
-        typeof message.text?.body === 'string'
-      ) {
-        incomingMessages.push({
-          from: message.from,
-          text: message.text.body,
-        });
+      for (const message of change.value?.messages ?? []) {
+        if (
+          message.type === 'text' &&
+          typeof message.text?.body === 'string'
+        ) {
+          incomingMessages.push({
+            from: message.from,
+            text: message.text.body,
+          });
+        }
       }
     }
   }
-}
 
-const lookupRequests = incomingMessages
-  .map(({ from, text }) => {
-    const match = text
-      .trim()
-      .match(/^LOOKUP\s+(\S+)\s+(\d{6})\s+(.+)$/i);
+  const lookupRequests = incomingMessages
+    .map(({ from, text }) => {
+      const match = text
+        .trim()
+        .match(/^LOOKUP\s+(\S+)\s+(\d{6})\s+(.+)$/i);
 
-    if (!match) return null;
+      if (!match) return null;
 
-    return {
-      from,
-      email: match[1].toLowerCase(),
-      code: match[2],
-      query: match[3].trim(),
-    };
-  })
-  .filter(Boolean);
+      return {
+        from,
+        email: match[1].toLowerCase(),
+        code: match[2],
+        query: match[3].trim(),
+      };
+    })
+    .filter(Boolean);
 
-const lookupResults = [];
+  const lookupResults = [];
 
-for (const lookup of lookupRequests) {
-  const lookupResponse = await fetch(
-    `http://127.0.0.1:${port}/api/recovery/lookup`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        email: lookup.email,
-        code: lookup.code,
-        query: lookup.query,
-      }),
-    }
-  );
+  for (const lookup of lookupRequests) {
+    const lookupResponse = await fetch(
+      `http://127.0.0.1:${port}/api/recovery/lookup`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: lookup.email,
+          code: lookup.code,
+          query: lookup.query,
+        }),
+      }
+    );
 
-  const result = await lookupResponse.json();
+    const result = await lookupResponse.json();
 
-  lookupResults.push({
-    accepted: lookupResponse.ok,
-    matches: Array.isArray(result.contacts) ? result.contacts.length : 0,
+    lookupResults.push({
+      accepted: lookupResponse.ok,
+      matches: Array.isArray(result.contacts) ? result.contacts.length : 0,
+    });
+  }
+
+  return response.status(200).json({
+    received: true,
+    textMessages: incomingMessages.length,
+    validLookupRequests: lookupRequests.length,
+    lookupResults,
   });
-}
-
-return response.status(200).json({
-  received: true,
-  textMessages: incomingMessages.length,
-  validLookupRequests: lookupRequests.length,
-  lookupResults,
-});
 });
 
 function authenticateToken(request, response, next) {
@@ -164,13 +194,12 @@ function authenticateToken(request, response, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     request.userId = payload.userId;
-   
-    
     next();
   } catch {
     return response.status(401).json({ message: 'Invalid or expired token.' });
   }
 }
+
 app.post('/api/lookup-pin', authenticateToken, async (request, response) => {
   try {
     const pin = String(request.body?.pin ?? '').trim();
@@ -242,12 +271,15 @@ app.post('/api/auth/signup', async (request, response) => {
         codeHash,
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
+      {
+        upsert: true,
+        returnDocument: 'after',
+        setDefaultsOnInsert: true,
+      }
     );
 
     try {
-      await mailer.sendMail({
-        from: process.env.MAIL_FROM,
+      await sendReachEmail({
         to: email,
         subject: 'Verify your Reach account',
         text:
@@ -256,15 +288,20 @@ app.post('/api/auth/signup', async (request, response) => {
       });
     } catch (emailError) {
       await PendingSignup.deleteOne({ email });
-      console.error('Could not send signup verification email:', emailError.message);
+      console.error(
+        'Could not send signup verification email:',
+        emailError.message
+      );
 
       return response.status(500).json({
-        message: 'Could not send the verification email. Check the address and try again.',
+        message:
+          'Could not send the verification email. Check the address and try again.',
       });
     }
 
     return response.status(200).json({
-      message: 'If that email can receive messages, a verification code has been sent. Check your inbox.',
+      message:
+        'If that email can receive messages, a verification code has been sent. Check your inbox.',
     });
   } catch (error) {
     console.error('Signup request failed:', error.message);
@@ -292,7 +329,8 @@ app.post('/api/auth/verify-signup', async (request, response) => {
 
     if (!pendingSignup) {
       return response.status(400).json({
-        message: 'The code is invalid or expired. Start signup again to get a new code.',
+        message:
+          'The code is invalid or expired. Start signup again to get a new code.',
       });
     }
 
@@ -398,8 +436,7 @@ app.post('/api/auth/forgot-password', async (request, response) => {
       });
 
       try {
-        await mailer.sendMail({
-          from: process.env.MAIL_FROM,
+        await sendReachEmail({
           to: user.email,
           subject: 'Your Reach password reset code',
           text:
@@ -408,7 +445,10 @@ app.post('/api/auth/forgot-password', async (request, response) => {
         });
       } catch (emailError) {
         await PasswordResetToken.deleteMany({ userId: user._id });
-        console.error('Could not send password reset email:', emailError.message);
+        console.error(
+          'Could not send password reset email:',
+          emailError.message
+        );
       }
     }
 
@@ -418,6 +458,7 @@ app.post('/api/auth/forgot-password', async (request, response) => {
     return response.json({ message: genericMessage });
   }
 });
+
 app.post('/api/recovery-codes', authenticateToken, async (request, response) => {
   try {
     const codes = new Set();
@@ -450,7 +491,6 @@ app.post('/api/recovery-codes', authenticateToken, async (request, response) => 
   }
 });
 
-
 // Require a valid token for every contact route below.
 app.use('/api/contacts', authenticateToken);
 
@@ -460,8 +500,9 @@ const MAX_RESET_CODE_ATTEMPTS = 5;
 
 function getResetCodeWaitMinutes(email) {
   const now = Date.now();
-  const recentAttempts = (resetCodeAttempts.get(email) ?? [])
-    .filter((time) => now - time < RESET_CODE_WINDOW_MS);
+  const recentAttempts = (resetCodeAttempts.get(email) ?? []).filter(
+    (time) => now - time < RESET_CODE_WINDOW_MS
+  );
 
   if (recentAttempts.length >= MAX_RESET_CODE_ATTEMPTS) {
     resetCodeAttempts.set(email, recentAttempts);
@@ -496,7 +537,8 @@ app.post('/api/auth/reset-password', async (request, response) => {
 
     if (!/^\d{6}$/.test(code) || password.length < 8) {
       return response.status(400).json({
-        message: 'Enter the six-digit code and a password of at least 8 characters.',
+        message:
+          'Enter the six-digit code and a password of at least 8 characters.',
       });
     }
 
@@ -504,7 +546,8 @@ app.post('/api/auth/reset-password', async (request, response) => {
 
     if (!user) {
       return response.status(400).json({
-        message: 'The code is invalid, expired, or already used. Request a new code.',
+        message:
+          'The code is invalid, expired, or already used. Request a new code.',
       });
     }
 
@@ -518,7 +561,8 @@ app.post('/api/auth/reset-password', async (request, response) => {
 
     if (!resetRecord) {
       return response.status(400).json({
-        message: 'The code is invalid, expired, or already used. Request a new code.',
+        message:
+          'The code is invalid, expired, or already used. Request a new code.',
       });
     }
 
@@ -528,7 +572,8 @@ app.post('/api/auth/reset-password', async (request, response) => {
     await PasswordResetToken.deleteMany({ userId: user._id });
 
     return response.json({
-      message: 'Password reset successfully. You can now sign in with your new password.',
+      message:
+        'Password reset successfully. You can now sign in with your new password.',
     });
   } catch (error) {
     console.error('Password reset failed:', error.message);
@@ -546,10 +591,7 @@ app.get('/api/contacts', async (request, response) => {
     const filter = { ownerId: request.userId };
 
     if (query) {
-      const conditions = [
-        { nameKey: { $regex: escapeRegex(query) } },
-      ];
-
+      const conditions = [{ nameKey: { $regex: escapeRegex(query) } }];
       const phoneDigits = query.replace(/\D/g, '');
 
       if (phoneDigits) {
@@ -659,23 +701,23 @@ app.post('/api/recovery/lookup', async (request, response) => {
     }
 
     const attemptKey = email;
-const now = Date.now();
-const previous = recoveryAttempts.get(attemptKey);
+    const now = Date.now();
+    const previous = recoveryAttempts.get(attemptKey);
 
-if (previous && now - previous.startedAt < RECOVERY_WINDOW_MS) {
-  if (previous.count >= MAX_RECOVERY_ATTEMPTS) {
-    return response.status(429).json({
-      message: 'Too many attempts. Try again in 15 minutes.',
-    });
-  }
+    if (previous && now - previous.startedAt < RECOVERY_WINDOW_MS) {
+      if (previous.count >= MAX_RECOVERY_ATTEMPTS) {
+        return response.status(429).json({
+          message: 'Too many attempts. Try again in 15 minutes.',
+        });
+      }
 
-  previous.count += 1;
-} else {
-  recoveryAttempts.set(attemptKey, {
-    count: 1,
-    startedAt: now,
-  });
-}
+      previous.count += 1;
+    } else {
+      recoveryAttempts.set(attemptKey, {
+        count: 1,
+        startedAt: now,
+      });
+    }
 
     const user = await User.findOne({ email });
 
@@ -707,7 +749,7 @@ if (previous && now - previous.startedAt < RECOVERY_WINDOW_MS) {
     const claimedCode = await RecoveryCode.findOneAndUpdate(
       { _id: matchingCode._id, usedAt: null },
       { $set: { usedAt: new Date() } },
-      { new: true }
+      { returnDocument: 'after' }
     );
 
     if (!claimedCode) {
@@ -856,8 +898,9 @@ const TELEGRAM_WINDOW_MS = 15 * 60 * 1000;
 
 function checkTelegramAttempt(userId) {
   const now = Date.now();
-  const recentAttempts = (telegramAttempts.get(userId) ?? [])
-    .filter((time) => now - time < TELEGRAM_WINDOW_MS);
+  const recentAttempts = (telegramAttempts.get(userId) ?? []).filter(
+    (time) => now - time < TELEGRAM_WINDOW_MS
+  );
 
   if (recentAttempts.length >= TELEGRAM_ATTEMPT_LIMIT) {
     telegramAttempts.set(userId, recentAttempts);
@@ -870,7 +913,6 @@ function checkTelegramAttempt(userId) {
   return 0;
 }
 
-
 async function handleTelegramMessage(message) {
   const chatId = message?.chat?.id;
   const text = typeof message?.text === 'string' ? message.text.trim() : '';
@@ -878,22 +920,24 @@ async function handleTelegramMessage(message) {
   if (!chatId || !text) return;
 
   if (/^\/start(?:@\w+)?(?:\s|$)/i.test(text)) {
-  await sendTelegramMessage(
-    chatId,
-    'Tap below to look up a contact in Reach.',
-    {
-      inline_keyboard: [[
-        {
-          text: 'Open Reach lookup',
-          web_app: {
-            url: 'https://reach-contact-assistant.onrender.com/?miniapp=1',
-          },
-        },
-      ]],
-    }
-  );
-  return;
-}
+    await sendTelegramMessage(
+      chatId,
+      'Tap below to look up a contact in Reach.',
+      {
+        inline_keyboard: [
+          [
+            {
+              text: 'Open Reach lookup',
+              web_app: {
+                url: 'https://reach-contact-assistant.onrender.com/?miniapp=1',
+              },
+            },
+          ],
+        ],
+      }
+    );
+    return;
+  }
 
   const match = text.match(/^LOOKUP\s+(\S+)\s+(\d{6})\s+(.+)$/i);
 
@@ -992,16 +1036,18 @@ async function startTelegramPolling() {
     }
   }
 }
+
 app.use(express.static(frontendDirectory));
+
 async function startServer() {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('Connected to MongoDB Atlas');
 
     app.listen(port, '0.0.0.0', () => {
-  console.log(`Reach server listening on port ${port}`);
-  void startTelegramPolling();
-});
+      console.log(`Reach server listening on port ${port}`);
+      void startTelegramPolling();
+    });
   } catch (error) {
     console.error('MongoDB connection failed:', error.message);
     process.exit(1);
