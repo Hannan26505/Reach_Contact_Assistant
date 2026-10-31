@@ -11,6 +11,7 @@ import nodemailer from 'nodemailer';
 import PasswordResetToken from './models/PasswordResetToken.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import PendingSignup from './models/PendingSignup.mjs';
 
 const recoveryAttempts = new Map();
 const MAX_RECOVERY_ATTEMPTS = 5;
@@ -229,8 +230,86 @@ app.post('/api/auth/signup', async (request, response) => {
       });
     }
 
+    const code = String(randomInt(100000, 1000000));
+    const codeHash = createHash('sha256').update(code).digest('hex');
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({ email, passwordHash });
+
+    await PendingSignup.findOneAndUpdate(
+      { email },
+      {
+        email,
+        passwordHash,
+        codeHash,
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    try {
+      await mailer.sendMail({
+        from: process.env.MAIL_FROM,
+        to: email,
+        subject: 'Verify your Reach account',
+        text:
+          `Your Reach verification code is: ${code}\n\n` +
+          'It expires in 10 minutes. If you did not try to create a Reach account, ignore this email.',
+      });
+    } catch (emailError) {
+      await PendingSignup.deleteOne({ email });
+      console.error('Could not send signup verification email:', emailError.message);
+
+      return response.status(500).json({
+        message: 'Could not send the verification email. Check the address and try again.',
+      });
+    }
+
+    return response.status(200).json({
+      message: 'If that email can receive messages, a verification code has been sent. Check your inbox.',
+    });
+  } catch (error) {
+    console.error('Signup request failed:', error.message);
+    return response.status(500).json({
+      message: 'Could not start signup. Please try again.',
+    });
+  }
+});
+
+app.post('/api/auth/verify-signup', async (request, response) => {
+  try {
+    const email = String(request.body.email ?? '').trim().toLowerCase();
+    const code = String(request.body.code ?? '').trim();
+
+    if (!email || !/^\d{6}$/.test(code)) {
+      return response.status(400).json({
+        message: 'Enter your email and the six-digit verification code.',
+      });
+    }
+
+    const pendingSignup = await PendingSignup.findOne({
+      email,
+      expiresAt: { $gt: new Date() },
+    });
+
+    if (!pendingSignup) {
+      return response.status(400).json({
+        message: 'The code is invalid or expired. Start signup again to get a new code.',
+      });
+    }
+
+    const submittedCodeHash = createHash('sha256').update(code).digest('hex');
+
+    if (submittedCodeHash !== pendingSignup.codeHash) {
+      return response.status(400).json({
+        message: 'The verification code is incorrect.',
+      });
+    }
+
+    const user = await User.create({
+      email: pendingSignup.email,
+      passwordHash: pendingSignup.passwordHash,
+    });
+
+    await PendingSignup.deleteOne({ _id: pendingSignup._id });
 
     const token = jwt.sign(
       { userId: user._id.toString() },
@@ -239,19 +318,21 @@ app.post('/api/auth/signup', async (request, response) => {
     );
 
     return response.status(201).json({
-      message: 'Account created.',
+      message: 'Email verified and account created.',
       token,
       user: { id: user._id.toString(), email: user.email },
     });
   } catch (error) {
     if (error.code === 11000) {
       return response.status(409).json({
-        message: 'An account with that email already exists.',
+        message: 'An account with that email already exists. Try signing in.',
       });
     }
 
-    console.error('Sign-up error:', error.message);
-    return response.status(500).json({ message: 'Could not create account.' });
+    console.error('Signup verification failed:', error.message);
+    return response.status(500).json({
+      message: 'Could not verify the code. Please try again.',
+    });
   }
 });
 
