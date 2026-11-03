@@ -182,3 +182,12 @@
     border-right-color: var(--border);
   }
 }
+.import-error {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid #f1b8b4;
+  border-radius: 10px;
+  background: #fff1f0;
+  color: #9f2118;
+  line-height: 1.5;
+}

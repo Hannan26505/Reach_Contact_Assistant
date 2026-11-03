@@ -18,7 +18,8 @@
     "mongoose": "^9.11.2",
     "nodemailer": "^10.1.7",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "vcard-parser": "^1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

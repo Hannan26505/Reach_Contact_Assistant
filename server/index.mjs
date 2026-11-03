@@ -665,6 +665,114 @@ app.post('/api/contacts', async (request, response) => {
   }
 });
 
+app.post('/api/contacts/import', async (request, response) => {
+  try {
+    const contacts = request.body?.contacts;
+
+    if (!Array.isArray(contacts) || contacts.length === 0) {
+      return response.status(400).json({
+        message: 'Choose at least one contact to import.',
+      });
+    }
+
+    if (contacts.length > 1000) {
+      return response.status(400).json({
+    message: 'You can import up to 500 contacts at a time. Split this file into smaller files and try again.',
+      });
+    }
+
+    const addedContacts = [];
+    const skippedContacts = [];
+    const namesInFile = new Set();
+    const phonesInFile = new Set();
+
+    for (const item of contacts) {
+      if (
+        typeof item?.name !== 'string' ||
+        typeof item?.phone !== 'string'
+      ) {
+        skippedContacts.push({ reason: 'Invalid contact data' });
+        continue;
+      }
+
+      const name = item.name.trim();
+      const phone = item.phone.trim();
+      const nameKey = name.toLowerCase();
+      const phoneDigits = phone.replace(/\D/g, '');
+
+      if (!name || !phoneDigits) {
+        skippedContacts.push({
+          name: name || '(unnamed)',
+          reason: 'Missing name or phone number',
+        });
+        continue;
+      }
+
+      if (namesInFile.has(nameKey) || phonesInFile.has(phoneDigits)) {
+        skippedContacts.push({
+          name,
+          reason: 'Duplicate in this VCF file',
+        });
+        continue;
+      }
+
+      namesInFile.add(nameKey);
+      phonesInFile.add(phoneDigits);
+
+      const alreadyExists = await Contact.exists({
+        ownerId: request.userId,
+        $or: [{ nameKey }, { phoneDigits }],
+      });
+
+      if (alreadyExists) {
+        skippedContacts.push({
+          name,
+          reason: 'Name or phone number already exists in your contacts',
+        });
+        continue;
+      }
+
+      try {
+        const contact = await Contact.create({
+          ownerId: request.userId,
+          name,
+          nameKey,
+          phone,
+          phoneDigits,
+        });
+
+        addedContacts.push({
+          id: contact.id,
+          name: contact.name,
+          phone: contact.phone,
+        });
+      } catch (error) {
+        if (error.code === 11000) {
+          skippedContacts.push({
+            name,
+            reason: 'Name or phone number already exists in your contacts',
+          });
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    return response.json({
+      addedContacts,
+      skippedContacts,
+      added: addedContacts.length,
+      skipped: skippedContacts.length,
+    });
+  } catch (error) {
+    console.error('Could not import contacts:', error.message);
+    return response.status(500).json({
+      message: 'Could not import contacts.',
+    });
+  }
+});
+
 app.delete('/api/contacts/:id', async (request, response) => {
   try {
     if (!mongoose.isValidObjectId(request.params.id)) {

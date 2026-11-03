@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import TelegramLookup from './TelegramLookup.jsx';
+import vCard from 'vcard-parser';
 
 function ReachApp() {
   const [recoveryCodes, setRecoveryCodes] = useState([]);
@@ -11,6 +12,10 @@ function ReachApp() {
   const [lookupPinMessage, setLookupPinMessage] = useState('');
   const [lookupPinError, setLookupPinError] = useState('');
   const [pendingSignupEmail, setPendingSignupEmail] = useState('');
+  const [importPreview, setImportPreview] = useState([]);
+  const [importError, setImportError] = useState('');
+  const [importMessage, setImportMessage] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
 
   const [token, setToken] = useState(
     () => localStorage.getItem('reach-token') || ''
@@ -379,6 +384,110 @@ function ReachApp() {
     setFormError('');
   }
 
+  async function handleVcfFileChange(event) {
+  const file = event.target.files?.[0];
+
+  setImportError('');
+  setImportPreview([]);
+
+  if (!file) return;
+
+  if (!file.name.toLowerCase().endsWith('.vcf')) {
+    setImportError('Choose a .vcf file.');
+    return;
+  }
+
+  try {
+    const fileText = await file.text();
+    const cardBlocks =
+      fileText.match(/BEGIN:VCARD[\s\S]*?END:VCARD/gi) || [];
+
+    const parsedContacts = cardBlocks
+      .map((block) => {
+        const card = vCard.parse(block);
+        const name = card.fn?.[0]?.value?.trim();
+
+        const phoneEntries = Array.isArray(card.tel)
+          ? card.tel
+          : card.tel
+            ? [card.tel]
+            : [];
+
+        const phoneEntry = phoneEntries.find((entry) => entry?.value);
+        const phone = String(phoneEntry?.value || '')
+          .replace(/^tel:/i, '')
+          .trim();
+
+        return { name, phone };
+      })
+      .filter((contact) => contact.name && contact.phone);
+
+    if (parsedContacts.length === 0) {
+      setImportError(
+        'No contacts with both a name and phone number were found in that file.'
+      );
+      return;
+    }
+
+    setImportPreview(parsedContacts);
+  } catch (error) {
+    console.error('Could not read VCF file:', error);
+    setImportError('Could not read this VCF file. Try exporting it again.');
+  }
+}
+
+async function handleImportContacts() {
+  if (importPreview.length === 0) return;
+
+  setImportError('');
+  setImportMessage('');
+  setIsImporting(true);
+
+  try {
+    const response = await fetch('/api/contacts/import', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ contacts: importPreview }),
+    });
+
+    const result = await response.json();
+
+    if (response.status === 401) {
+      clearSession('Your session expired. Please sign in again.');
+      return;
+    }
+
+    if (!response.ok) {
+      setImportError(result.message || 'Could not import contacts.');
+      return;
+    }
+
+    setContacts((currentContacts) => {
+      const mergedContacts = new Map(
+        currentContacts.map((contact) => [contact.id, contact])
+      );
+
+      for (const contact of result.addedContacts) {
+        mergedContacts.set(contact.id, contact);
+      }
+
+      return [...mergedContacts.values()];
+    });
+
+    setSearch('');
+    setImportPreview([]);
+    setImportMessage(
+      `Import complete: ${result.added} added, ${result.skipped} skipped.`
+    );
+  } catch {
+    setImportError('Could not connect to the server. Check that it is running.');
+  } finally {
+    setIsImporting(false);
+  }
+}
   return (
     <main>
       {!token && (
@@ -822,6 +931,44 @@ function ReachApp() {
 
             <button type="submit">Add contact</button>
           </form>
+          <section>
+            <h2>Import contacts</h2>
+            <label>
+              Choose a VCF file
+              <input
+                type="file"
+                accept=".vcf,text/vcard"
+                onChange={handleVcfFileChange}
+              />
+            </label>
+
+            {importError && (
+              <p className="import-error" role="alert">
+                {importError}
+              </p>
+            )}
+
+            {importPreview.length > 0 && (
+              <div>
+                <h3>Preview ({importPreview.length} contacts)</h3>
+                <ul>
+                  {importPreview.map((contact, index) => (
+                    <li key={`${contact.phone}-${index}`}>
+                      <strong>{contact.name}</strong> — {contact.phone}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleImportContacts}
+              disabled={isImporting}
+            >
+              {isImporting ? 'Importing…' : `Import ${importPreview.length} contacts`}
+              {importMessage && <p role="status">{importMessage}</p>}
+            </button>
+          </section>
 
           {formError && (
             <p className="form-error" role="alert">
